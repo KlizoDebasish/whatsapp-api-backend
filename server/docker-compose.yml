@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: whatsapp_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: whatsapp_gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  server:
+    build: .
+    container_name: whatsapp_server
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      DATABASE_URL: "postgresql://postgres:postgrespassword@postgres:5432/whatsapp_gateway?schema=public"
+    depends_on:
+      - postgres
+    restart: always
+
+volumes:
+  postgres_data:

@@ -1,0 +1,307 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum SessionStatus {
+  disconnected
+  connecting
+  qr_ready
+  connected
+  logged_out
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageType {
+  text
+  image
+  document
+  audio
+  video
+  sticker
+  reaction
+}
+
+enum MessageStatus {
+  queued
+  typing
+  sent
+  delivered
+  read
+  failed
+}
+
+enum InventoryLogType {
+  in
+  out
+  adjustment
+}
+
+// ─────────────────────────────────────────────
+// Sessions
+// ─────────────────────────────────────────────
+
+model Session {
+  id                String         @id
+  name              String
+  phoneNumber       String?        @map("phone_number")
+  status            SessionStatus  @default(disconnected)
+  qrCode            String?        @map("qr_code") @db.Text
+  reconnectAttempts Int            @default(0) @map("reconnect_attempts")
+  autoReconnect     Boolean        @default(true) @map("auto_reconnect")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  lastConnectedAt   DateTime?      @map("last_connected_at")
+
+  messages   Message[]
+  authStates SessionAuthState[]
+
+  @@map("sessions")
+}
+
+// ─────────────────────────────────────────────
+// Baileys Auth State (replaces MongoDB session_auth_state)
+// ─────────────────────────────────────────────
+
+model SessionAuthState {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @map("session_id")
+  keyId     String   @map("key_id")
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, keyId])
+  @@index([sessionId])
+  @@map("session_auth_state")
+}
+
+// ─────────────────────────────────────────────
+// API Keys
+// ─────────────────────────────────────────────
+
+model ApiKey {
+  id              String    @id @default(cuid())
+  name            String
+  keyHash         String    @unique @map("key_hash")
+  keyPrefix       String    @map("key_prefix")
+  allowedChats    String    @default("\"*\"") @map("allowed_chats") @db.Text
+  permissions     String[]  // PostgreSQL native text array
+  rateLimitPerMin Int       @default(60) @map("rate_limit_per_min")
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  lastUsedAt      DateTime? @map("last_used_at")
+
+  @@map("api_keys")
+}
+
+// ─────────────────────────────────────────────
+// Messages Log
+// ─────────────────────────────────────────────
+
+model Message {
+  id           String           @id @default(cuid())
+  sessionId    String           @map("session_id")
+  chatId       String           @map("chat_id")
+  senderId     String?          @map("sender_id")
+  direction    MessageDirection
+  messageType  MessageType      @map("message_type")
+  content      String?          @db.Text
+  mediaUrl     String?          @map("media_url")
+  status       MessageStatus    @default(queued)
+  delaySeconds Int              @default(0) @map("delay_seconds")
+  scheduledAt  DateTime         @default(now()) @map("scheduled_at")
+  sentAt       DateTime?        @map("sent_at")
+  errorMessage String?          @map("error_message")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId, createdAt(sort: Desc)])
+  @@index([chatId, createdAt(sort: Desc)])
+  @@map("messages_log")
+}
+
+// ─────────────────────────────────────────────
+// ERP Products
+// ─────────────────────────────────────────────
+
+model ErpProduct {
+  id            Int      @id @default(autoincrement())
+  sku           String   @unique
+  name          String
+  category      String
+  price         Decimal  @db.Decimal(10, 2)
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  unit          String   @default("pcs")
+  reorderLevel  Int      @default(10) @map("reorder_level")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  sales         ErpSale[]
+  inventoryLogs ErpInventoryLog[]
+
+  @@map("erp_products")
+}
+
+// ─────────────────────────────────────────────
+// ERP Sales
+// ─────────────────────────────────────────────
+
+model ErpSale {
+  id            Int      @id @default(autoincrement())
+  orderId       String   @map("order_id")
+  productId     Int      @map("product_id")
+  productName   String   @map("product_name")
+  quantity      Int
+  unitPrice     Decimal  @db.Decimal(10, 2) @map("unit_price")
+  totalAmount   Decimal  @db.Decimal(10, 2) @map("total_amount")
+  customerName  String?  @map("customer_name")
+  customerPhone String?  @map("customer_phone")
+  saleDate      DateTime @default(now()) @map("sale_date") @db.Date
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  product ErpProduct @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([saleDate(sort: Desc)])
+  @@map("erp_sales")
+}
+
+// ─────────────────────────────────────────────
+// ERP Inventory Logs
+// ─────────────────────────────────────────────
+
+model ErpInventoryLog {
+  id        Int              @id @default(autoincrement())
+  productId Int              @map("product_id")
+  type      InventoryLogType
+  quantity  Int
+  note      String?
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  product ErpProduct @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@map("erp_inventory_logs")
+}
+
+// ─────────────────────────────────────────────
+// Webhooks
+// ─────────────────────────────────────────────
+
+model Webhook {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  secret    String?
+  events    String[] // e.g. ["*"] or ["message.received", "session.status"]
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  logs WebhookLog[]
+
+  @@map("webhooks")
+}
+
+// ─────────────────────────────────────────────
+// Webhook Delivery Logs
+// ─────────────────────────────────────────────
+
+model WebhookLog {
+  id              Int      @id @default(autoincrement())
+  webhookId       String?  @map("webhook_id")
+  eventType       String   @map("event_type")
+  payload         Json
+  responseCode    Int?     @map("response_code")
+  responseBody    String?  @map("response_body") @db.Text
+  status          String   // 'success' | 'failed'
+  errorMessage    String?  @map("error_message")
+  executionTimeMs Int?     @map("execution_time_ms")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  webhook Webhook? @relation(fields: [webhookId], references: [id], onDelete: SetNull)
+
+  @@index([webhookId, createdAt(sort: Desc)])
+  @@map("webhook_logs")
+}
+
+// ─────────────────────────────────────────────
+// Gateway Configuration (key-value store)
+// ─────────────────────────────────────────────
+
+model GatewayConfig {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("gateway_config")
+}
+
+// ─────────────────────────────────────────────
+// Media Files (stored as bytea in PostgreSQL)
+// ─────────────────────────────────────────────
+
+model MediaFile {
+  id          Int      @id @default(autoincrement())
+  filename    String   @unique
+  data        Bytes
+  contentType String   @default("application/octet-stream") @map("content_type")
+  size        Int
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("media_files")
+}
+
+// ─────────────────────────────────────────────
+// LangChain RAG Knowledge Base Documents & Chunks
+// ─────────────────────────────────────────────
+
+model RagDocument {
+  id           String     @id @default(cuid())
+  filename     String
+  fileType     String     @default("pdf") @map("file_type")
+  fileSize     Int        @default(0) @map("file_size")
+  totalChunks  Int        @default(0) @map("total_chunks")
+  status       String     @default("indexed") // "uploading" | "processing" | "indexed" | "error"
+  errorMessage String?    @map("error_message")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  chunks RagChunk[]
+
+  @@map("rag_documents")
+}
+
+model RagChunk {
+  id          String   @id @default(cuid())
+  documentId  String   @map("document_id")
+  chunkIndex  Int      @map("chunk_index")
+  content     String   @db.Text
+  embedding   Float[]  // 768-dimension vector representation from gemini-embedding-001
+  tokenCount  Int      @default(0) @map("token_count")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  document RagDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("rag_chunks")
+}
